@@ -1,5 +1,5 @@
 {
-    "videoProcesser": {
-        "filePath": "./raw_data/av/"
+    "videoSource": {
+        "baseTempPath": "./processing/video/"
     }
 }

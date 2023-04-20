@@ -5,7 +5,6 @@
 
 import asyncio, queue
 from objects import Item
-from processor.video_processor import VideoProcessor
 
 
 process_queue = queue.Queue()
@@ -19,14 +18,11 @@ async def run():
     source_addr = input("请输入数据地址：")
     processed_type = input("请输入处理后类型：")
 
-    if processed_type == "video":
-        processor = VideoProcessor
-
-    new_item = Item(name, source_addr, source_type, processor)
+    new_item = Item.create_from_raw_info(name, source_addr, source_type, processed_type)
     process_queue.put(new_item)
-    new_item = process_queue.get(new_item)
+    new_item: Item = process_queue.get(new_item)
 
-    new_item.process()
+    await new_item.process()
 
 
 if __name__ == '__main__':

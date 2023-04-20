@@ -1,4 +1,4 @@
-# env: python3.7 lxml ffmpeg
+# env: python3.10 lxml ffmpeg
 # author: Lanzhijiang
 # date: 2023/04/05
 # description: 
@@ -8,120 +8,151 @@
 
 from bilibili_api import video, Credential
 from bilibili_api import settings as bilibiapi_settings
-import bilibili_api.utils.network as network
+# import bilibili_api.utils.network as network
 import httpx, re, requests
-from ffmpeg.asyncio import FFmpeg
-from ffmpeg import Progress
+# from ffmpeg.asyncio import FFmpeg
+# from ffmpeg import Progress
 import asyncio, os, json
-from tqdm import tqdm 
+from tqdm import tqdm
+from . import Source
+
+if __name__ == "__main__":
+    from objects import Item
 
 # settings
-BASE_FILE_PATH = json.load("./data/settings.json")["videoProcessor"]["filePath"]
+settings = json.load(open("./data/settings.json", "r"), encoding="utf-8")["videoSource"]
 
 # CONSTANT
-BASE_VID_URL = "https://www.bilibili.com/video/"
-HEADERS = {
-    "origin": "https://www.bilibili.com",
-    "referer": None,
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36 Edg/111.0.1661.62",
-}
-
-VIDEO_QUALITY = 80
-AUDIO_QUALITY = None
-
-# bilibili_identity
-SESSDATA = "2f53b70f%2C1696164775%2C098f8%2A42"
-BILI_JCT = "3853f557ccee4247cef1412be9b15ffa"
-BUVID3 = "508400C7-2B40-A1A3-E6D1-013148F896F962620infoc"
-credential = Credential(sessdata=SESSDATA, bili_jct=BILI_JCT, buvid3=BUVID3)
 
 # bilibili_api setting
 bilibiapi_settings.timeout = 5.0
 # settings.geetest_auto_open = False
 
 
-class Video(video.Video):
+class VideoSource(Source):
 
-    def __init__(self, vid_url=None, vid=None) -> None:
+    VIDEO_QUALITY = 80
+    AUDIO_QUALITY = None 
+
+    def __init__(self, video_addr=None, item: Item = None) -> None:
         
-        self.vid = vid
-        self.vid_url = vid_url
-        if self.vid_url is not None:
-            self.vid = re.findall("https:\/\/www.bilibili.com\/video\/(.*?)\/", vid_url)[0]
-        else:
-            self.vid_url = BASE_VID_URL + vid
-        if self.vid is None or self.vid_url is None:
-            raise ValueError("vid_url or vid should be filled")
-        
-        if "BV" in self.vid:
-            self.vid_type = "bv"
-            video.Video.__init__(self, bvid=self.vid, credential=credential)
-        else:
-            self.vid_type = "av"
-            video.Video.__init__(self, aid=self.vid, credential=credential)
+        Source.__init__(self, "video", item)
+        self.video_addr = video_addr
+        self.video_title = None
 
-        self.vid_url = vid_url
-
-    @staticmethod
-    def select_ideal_streams(download_data):
+    @classmethod
+    def select_ideal_streams(cls, dash):
 
         """
         选出理想音频视频流
         :return Tuple[List[VideoStreamDownloadURL | AudioStreamDownloadURL], None]
         """
-        dash = download_data["dash"]
         video_dash = dash["video"]
         audio_dash = dash["audio"]
 
         # select video
         for one in video_dash:
-            if one["id"] == VIDEO_QUALITY:
+            if one["id"] == cls.VIDEO_QUALITY:
                 print("选择视频流：%s %s %s %s" % ("%sp" % one["height"], one["bandwidth"], one["codecs"], one["mimeType"]))
                 video_steam_download_url = one["baseUrl"]
                 vid_format = one["mimeType"][-3:]
                 break
 
         # select audio
-        if AUDIO_QUALITY is None:
+        if cls.AUDIO_QUALITY is None:
             audio_one = audio_dash[-1]
         else:
             for one in audio_dash:
-                if one["bandwidth"] == AUDIO_QUALITY:
+                if one["bandwidth"] == cls.AUDIO_QUALITY:
                     audio_one = one
                     break
         print("选择音频流：%s %s %s" % ("%s" % one["bandwidth"], one["codecs"], one["mimeType"]))
         audio_steam_download_url = audio_one["baseUrl"]
 
         return (video_steam_download_url, audio_steam_download_url), vid_format
+
+class BilibiliWork(VideoSource, video.Video):
+
+    ''' b站稿件源类 '''
+
+    BASE_URL = "https://www.bilibili.com/video/"
+    SESSDATA = "2f53b70f%2C1696164775%2C098f8%2A42"
+    BILI_JCT = "3853f557ccee4247cef1412be9b15ffa"
+    BUVID3 = "508400C7-2B40-A1A3-E6D1-013148F896F962620infoc"
+    credential = Credential(sessdata=SESSDATA, bili_jct=BILI_JCT, buvid3=BUVID3)
+
+    HEADERS = {
+        "origin": "https://www.bilibili.com",
+        "referer": None,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36 Edg/111.0.1661.62",
+    }
+    
+    def __init__(self, video_addr=None, video_id=None, item=None) -> None:
+        
+        VideoSource.__init__(self, video_addr, item)
+        self.video_addr, self.video_id, self.video_type = self._get_video_source_info_from_addr(video_addr, video_id)
+
+        self._download_content = self.download_video_and_audio
+        # self._download_metadata = self.download_metadata
+
+    @property
+    async def title(self):
+        if self.video_title is None:
+            self.video_title = await self.get_info()["title"]
+        return self.video_title
+
+    def _get_video_source_info_from_addr(self, video_addr=None, video_id=None):
+
+        """
+        从视频源地址中提取视频源信息
+        """
+        if video_addr is not None:
+            video_id = re.findall("https:\/\/www.bilibili.com\/video\/(.*?)\/", video_addr)[0]
+        else:
+            video_addr = self.BASE_URL + video_id
+        if video_id is None or video_addr is None:
+            raise ValueError("video_addr or video_id should be filled")
+        
+        if "BV" in video_id:
+            video_id_type = "bv"
+            video.Video.__init__(self, bvid=video_id, credential=self.credential)
+        else:
+            video_id_type = "av"
+            video.Video.__init__(self, aid=video_id, credential=self.credential)
+
+        return video_addr, video_id, video_id_type
     
     @staticmethod
-    def _process_title(v_title):
+    def _format_title(v_title: str):
         return v_title.replace(" ", "_")
 
-    async def fetch_video_data(self):
+    async def download_video_and_audio(self):
         
         """
         获取视频数据
             获取音频流(mp3)与视频流(mp4)以及字幕文件(如果有)
         """
         v_info = await self.get_info()
-        v_title = self._process_title(v_info["title"])
+        v_title = self._format_title(v_info["title"])
+        self.video_title = v_title
+        if self.work_temp_path is None:
+            self.work_temp_path = "%s/%s/" % (self.temp_path, self.video_title)
         
 
         download_data = await self.get_download_url(0)
-        streams, vid_format = self.select_ideal_streams(download_data)
+        streams, vid_format = self.select_ideal_streams(download_data["dash"])
         if vid_format == "flv":
-            out_temp_fp = BASE_FILE_PATH + "%s_temp.flv" % v_title
+            out_temp_fp = self.temp_path + "%s_temp.flv" % v_title
             await self.download_stream_data(streams[0], out_temp_fp, "FLV 音视频流 %s" % v_title)
-            to_video = FFmpeg().option("an").input(out_temp_fp).output("%s_video.mp4" % v_title, {"codec": "copy"})
-            to_audio = FFmpeg().option("vn").input(out_temp_fp).output("%s_audio.mp3" % v_title, {"codec": "copy"})
+            # to_video = FFmpeg().option("an").input(out_temp_fp).output("%s_video.mp4" % v_title, {"codec": "copy"})
+            # to_audio = FFmpeg().option("vn").input(out_temp_fp).output("%s_audio.mp3" % v_title, {"codec": "copy"})
         else:
-            out_vid_fp = BASE_FILE_PATH + "%s_video.m4s" % v_title
-            out_aud_fp = BASE_FILE_PATH + "%s_audio.m4s" % v_title
+            out_vid_fp = self.temp_path + "%s_video.m4s" % v_title
+            out_aud_fp = self.temp_path + "%s_audio.m4s" % v_title
             await self.download_stream_data(streams[0], out_vid_fp, "MP4 视频流 %s" % v_title)
             await self.download_stream_data(streams[1], out_aud_fp, "MP4 音频流 %s" % v_title)
-            os.system(f"ffmpeg -i %s %s_video.mp4" % (out_vid_fp, BASE_FILE_PATH+v_title))
-            os.system(f"ffmpeg -i %s %s_audio.mp3" % (out_aud_fp, BASE_FILE_PATH+v_title))
+            os.system(f"ffmpeg -i %s %s_video.mp4" % (out_vid_fp, self.temp_path+v_title))
+            os.system(f"ffmpeg -i %s %s_audio.mp3" % (out_aud_fp, self.temp_path+v_title))
 
         return out_vid_fp.replace("ms4", "mp4"), out_aud_fp.replace("ms4", "mp3"), 
 
@@ -130,11 +161,11 @@ class Video(video.Video):
         """
         获取流数据并保存
         """
-        HEADERS["referer"] = self.vid_url[:-1]
+        self.HEADERS["referer"] = self.video_addr[:-1]
         
-        async with httpx.AsyncClient(headers=HEADERS) as session:
+        async with httpx.AsyncClient(headers=self.HEADERS) as session:
         # with requests.session() as session:
-            res = await session.get(url=stram_url, cookies=credential.get_cookies())
+            res = await session.get(url=stram_url, cookies=self.credential.get_cookies())
             length = res.headers.get('content-length')
 
             progress_bar = tqdm(total=int(length))
@@ -147,17 +178,25 @@ class Video(video.Video):
                     f.write(chunk)
                     progress_bar.update(1024)
 
+    async def download_metadata(self, fields: list = None):
+        
+        """
+        下载元数据
+            包括部分TAG、字幕、分P信息等
+        """
+        _fields = [
+                ("subtitle", lambda self: self.get_subtitle(self.get_cid())), 
+                ("tags", lambda self: self.get_tags(self.get_cid)),
+                ("pages", lambda self: self.get_pages())
+            ]
+        if fields is not None:
+            _fields.extend(fields)
 
-async def enterance():
-    
-    v = Video("https://www.bilibili.com/video/BV1Hk4y1q7Rz/")
-    await v.fetch_video_data()
+        result = {}
+        for field in _fields:
+            result[field[0]] = field[1](self)
 
+        json.dump(result, open("%s/metadata.json" % self.temp_path, "w"), encoding="utf-8")
 
-def asr(title, audio_fp):
+        return result
 
-    
-    
-
-if __name__ == '__main__':
-    asyncio.get_event_loop().run_until_complete(enterance())

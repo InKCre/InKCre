@@ -33,3 +33,10 @@ class VideoProcessor:
             不同于语音，采用OCR技术
         """
 
+    @classmethod
+    def speech_split(cls, audio_fp):
+
+        """
+        语音分段
+            
+        """

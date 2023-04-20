@@ -5,5 +5,5 @@ processed_type_to_processor_cls_table = {
 }
 
 
-def get_processor(processed_type):
+def get_processor_cls(processed_type):
     return processed_type_to_processor_cls_table[processed_type]
