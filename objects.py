@@ -53,3 +53,6 @@ class Item:
         # 获取源数据
         await self.source.download_content()
         await self.source.download_metadata()
+
+        # 开始处理
+        await self.processor.process(self)

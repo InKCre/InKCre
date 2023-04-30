@@ -14,13 +14,17 @@ import httpx, re, requests
 # from ffmpeg import Progress
 import asyncio, os, json
 from tqdm import tqdm
-from . import Source
+from source_base import Source
 
-if __name__ == "__main__":
-    from objects import Item
+# if __name__ == "__main__":
+#     from objects import Item
 
 # settings
-settings = json.load(open("./data/settings.json", "r"), encoding="utf-8")["videoSource"]
+# settings = json.load(open("../data/settings.json", "r"), encoding="utf-8")["videoSource"]
+settings = {
+        "baseTempPath": "./processing/video/",
+        "language": "zh-Hans"
+}
 
 # CONSTANT
 
@@ -34,11 +38,16 @@ class VideoSource(Source):
     VIDEO_QUALITY = 80
     AUDIO_QUALITY = None 
 
-    def __init__(self, video_addr=None, item: Item = None) -> None:
+    def __init__(self, video_addr=None, item = None) -> None:
         
         Source.__init__(self, "video", item)
         self.video_addr = video_addr
         self.video_title = None
+
+        self.video_fp = None
+        self.audio_fp = None
+
+        self.is_subtitle_available = False
 
     @classmethod
     def select_ideal_streams(cls, dash):
@@ -95,6 +104,9 @@ class BilibiliWork(VideoSource, video.Video):
         self._download_content = self.download_video_and_audio
         # self._download_metadata = self.download_metadata
 
+        self.pages = None
+        self.tags: list = None
+
     @property
     async def title(self):
         if self.video_title is None:
@@ -138,23 +150,30 @@ class BilibiliWork(VideoSource, video.Video):
         if self.work_temp_path is None:
             self.work_temp_path = "%s/%s/" % (self.temp_path, self.video_title)
         
+        out_temp_video_fp = self.temp_path + "%s_video.m4s" % v_title
+        out_temp_audio_fp = self.temp_path + "%s_audio.m4s" % v_title
+        out_video_fp = self.temp_path + v_title + "_video.mp4"
+        out_audio_fp = self.temp_path + v_title + "_audio.mp3"
 
         download_data = await self.get_download_url(0)
         streams, vid_format = self.select_ideal_streams(download_data["dash"])
         if vid_format == "flv":
-            out_temp_fp = self.temp_path + "%s_temp.flv" % v_title
-            await self.download_stream_data(streams[0], out_temp_fp, "FLV 音视频流 %s" % v_title)
-            # to_video = FFmpeg().option("an").input(out_temp_fp).output("%s_video.mp4" % v_title, {"codec": "copy"})
-            # to_audio = FFmpeg().option("vn").input(out_temp_fp).output("%s_audio.mp3" % v_title, {"codec": "copy"})
+            out_av_fp = self.temp_path + "%s_temp.flv" % v_title
+            await self.download_stream_data(streams[0], out_av_fp, "FLV 音视频流 %s" % v_title)
+            os.system(f"ffmpeg -i %s %s_video.mp4" % (out_av_fp, out_video_fp))
+            os.system(f"ffmpeg -i %s %s_audio.mp3" % (out_av_fp, out_audio_fp))
+            os.remove(out_av_fp)
         else:
-            out_vid_fp = self.temp_path + "%s_video.m4s" % v_title
-            out_aud_fp = self.temp_path + "%s_audio.m4s" % v_title
-            await self.download_stream_data(streams[0], out_vid_fp, "MP4 视频流 %s" % v_title)
-            await self.download_stream_data(streams[1], out_aud_fp, "MP4 音频流 %s" % v_title)
-            os.system(f"ffmpeg -i %s %s_video.mp4" % (out_vid_fp, self.temp_path+v_title))
-            os.system(f"ffmpeg -i %s %s_audio.mp3" % (out_aud_fp, self.temp_path+v_title))
+            await self.download_stream_data(streams[0], out_temp_video_fp, "MP4 视频流 %s" % v_title)
+            await self.download_stream_data(streams[1], out_temp_audio_fp, "MP4 音频流 %s" % v_title)
+            os.system(f"ffmpeg -i %s %s_video.mp4" % (out_temp_video_fp, out_video_fp))
+            os.system(f"ffmpeg -i %s -ac 1 -ar 16000 %s_audio.mp3" % (out_temp_audio_fp, out_audio_fp))
+            os.remove(out_temp_video_fp); os.remove(out_temp_audio_fp)
 
-        return out_vid_fp.replace("ms4", "mp4"), out_aud_fp.replace("ms4", "mp3"), 
+        self.video_fp = out_video_fp
+        self.audio_fp = out_audio_fp
+
+        return out_temp_video_fp, out_temp_audio_fp
 
     async def download_stream_data(self, stram_url, out_fp, info):
         
@@ -178,6 +197,23 @@ class BilibiliWork(VideoSource, video.Video):
                     f.write(chunk)
                     progress_bar.update(1024)
 
+    async def _get_subtitle(self, pid=0) -> list:
+        subtitles = self.get_subtitle(self.get_cid(pid))["subtitles"]
+        if subtitles:
+            for subtitle in subtitles:
+                if subtitle["lan"] == settings["language"]:
+                    subtitle_json = requests.get("https://%s" % subtitle["subtitle_url"]).content
+                    self.is_subtitle_available = True
+        else:
+            subtitle_json = []
+            self.is_subtitle_available = False
+        
+        json.dump(subtitle_json, open("%s/subtitle.json" % self.temp_path))
+        return subtitle_json
+
+    async def _get_tags(self, pid=0) -> list:
+        return self.get_tags(self.get_cid(pid))
+
     async def download_metadata(self, fields: list = None):
         
         """
@@ -185,9 +221,9 @@ class BilibiliWork(VideoSource, video.Video):
             包括部分TAG、字幕、分P信息等
         """
         _fields = [
-                ("subtitle", lambda self: self.get_subtitle(self.get_cid())), 
-                ("tags", lambda self: self.get_tags(self.get_cid)),
-                ("pages", lambda self: self.get_pages())
+                ("subtitle", self._get_subtitle), 
+                # ("tags", self._get_tags),
+                ("pages", self.get_pages)
             ]
         if fields is not None:
             _fields.extend(fields)
@@ -196,7 +232,17 @@ class BilibiliWork(VideoSource, video.Video):
         for field in _fields:
             result[field[0]] = field[1](self)
 
-        json.dump(result, open("%s/metadata.json" % self.temp_path, "w"), encoding="utf-8")
+        self.metadata["subtitle"] = result["subtitle"]
+        self.metadata["pages"] = result["pages"]
 
         return result
+    
+
+# async def entrance(video_addr):
+#     vid = BilibiliWork(video_addr)
+#     print(await vid.get_tags(await vid.get_cid(2)))
+
+
+# if __name__ == "__main__":
+#     asyncio.get_event_loop().run_until_complete(entrance("https://www.bilibili.com/video/BV14M4y117MB/"))
 

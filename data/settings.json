@@ -1,5 +1,11 @@
 {
     "videoSource": {
         "baseTempPath": "./processing/video/"
+    },
+    "videoProcessor": {
+
+    },
+    "item": {
+        "defaultProcessedAddr": "./processed/"
     }
 }

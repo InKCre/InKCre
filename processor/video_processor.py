@@ -22,7 +22,7 @@ class VideoProcessor:
         语音转文字
         """
         model = whisper.load_model(model_id)
-        result = model.transcribe(audio_fp)["text"]
+        result = model.transcribe(audio_fp)["segments"]
         return result
         
     @classmethod
@@ -38,5 +38,11 @@ class VideoProcessor:
 
         """
         语音分段
-            
+
         """
+
+    @classmethod
+    def process(cls, item):
+
+        if not item.source.is_subtitle_available:
+            self.audio_to_text
