@@ -4,6 +4,7 @@
 # date: 2022/10/16
 
 from copy import deepcopy
+import json
 import datetime
 import threading
 import time
@@ -11,13 +12,8 @@ import os
 import queue
 from typing import Tuple, Union
 
-log_setting = Settings.get_json_setting("log")
+log_setting = json.load(open("./config/settings.json", "r", encoding="utf-8"))
 log_level_list = ["DEBUG", "INFO", "WARNING", "ERROR", "FATAL"]
-
-
-def reload_log_setting():
-
-    Settings.reload_json_setting("log")
 
 
 def get_date():
@@ -43,12 +39,11 @@ class RunningLog:
         获取log文件路径
         :return:
         """
-        basic_path = log_setting["logPath"]
-        log_file_name = "running_%s.log" % get_date()
-        if os.path.exists(basic_path + log_file_name) is False:
-            create_log_file = open(basic_path + log_file_name, "w")
+        log_file_path = "%s/running_%s.log" % (log_setting["logPath"], get_date())
+        if os.path.exists(log_file_path) is False:
+            create_log_file = open(log_file_path, "w")
             create_log_file.close()
-        return "%s%s" % (basic_path, log_file_name)
+        return log_file_path
 
     @classmethod
     def get_formatted_log(cls, log_func, content_fstr, fnum=1):
@@ -70,7 +65,7 @@ class RunningLog:
             先添加到队列里面，超过一定数量再写入
             大于等于等级3的log会被同步写入
         :param logger: 记录者名称
-        :param level: log级别  0: DEBUG 1: INFO 2: WARNING 3: EXCEPTION(当前任务可能停止) 4: FATAL: 主线程退出
+        :param level: log级别  0: DEBUG 1: INFO 2: WARNING 3: ERROR(当前任务可能停止) 4: FATAL: 主线程退出
         :param content: log内容
         :param is_print: 是否打印(为False时优先级高于设置)
         :param add_period: 是否添加句号
